@@ -1,0 +1,14 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+cache/
+out/*.csv
+out/*.json
+out/*.md
+!out/.gitkeep
+.DS_Store

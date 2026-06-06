@@ -1,0 +1,47 @@
+# Top Models pipeline — weights and source toggles (committed; no secrets here)
+top_n: 25
+
+weights:
+  search: 0.30
+  listings: 0.15
+  community: 0.10
+  first_party: 0.25
+  problems: 0.20
+
+sources:
+  nhtsa: true
+  trends: true
+  firstparty: true
+  reports: true
+  reddit: false
+  keywordplanner: false
+  marketcheck: false
+
+budget:
+  max_paid_calls: 0
+
+# Used-car model years to include when seeding from reports (relative to run year)
+model_year_window:
+  min_years_ago: 3
+  max_years_ago: 12
+
+firstparty:
+  # Path to MotoMetrics telemetry export JSON (override via FIRSTPARTY_EXPORT_PATH in .env)
+  export_path: "data/sample_telemetry_export.json"
+  exclude_demo: true
+
+trends:
+  geo: "US"
+  timeframe: "today 12-m"
+  # pytrends is unofficial and rate-limited; pause between requests (seconds)
+  request_pause_sec: 2.0
+
+nhtsa:
+  request_pause_sec: 0.35
+  max_complaints_per_model: 500
+
+reports:
+  curated_path: "data/curated_reports.json"
+
+cache_dir: "cache"
+output_dir: "out"

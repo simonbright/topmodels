@@ -1,0 +1,45 @@
+{
+  "count": 3,
+  "records": [
+    {
+      "id": "sample-tacoma-1",
+      "type": "vehicle_scan",
+      "recordedAt": "2026-05-20T14:22:00.000Z",
+      "vin": "5TFRX5GN0LX123456",
+      "vehicle": {
+        "year": 2020,
+        "make": "Toyota",
+        "model": "Tacoma",
+        "spec": "TRD Off-Road"
+      },
+      "analysis": {
+        "score": 78,
+        "risk": "Medium",
+        "explanation": "Pending monitors and moderate repair exposure from scan."
+      },
+      "connection": { "mode": "ble" }
+    },
+    {
+      "id": "sample-tacoma-2",
+      "type": "vehicle_scan",
+      "recordedAt": "2026-05-22T09:10:00.000Z",
+      "vin": "5TFRX5GN0LX123456",
+      "vehicle": {
+        "year": 2020,
+        "make": "Toyota",
+        "model": "Tacoma"
+      },
+      "analysis": { "score": 82 },
+      "connection": { "mode": "ble" }
+    },
+    {
+      "id": "sample-civic-demo",
+      "type": "vehicle_scan",
+      "recordedAt": "2026-05-01T12:00:00.000Z",
+      "demoShowcase": true,
+      "vehicle": { "year": 2014, "make": "Honda", "model": "Civic" },
+      "analysis": { "score": 91 },
+      "connection": { "mode": "simulation", "simProfile": "civic" }
+    }
+  ]
+}

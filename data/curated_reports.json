@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "description": "Hand-curated rankings from published industry reports. Each row must cite source_name and source_url. Do not scrape — only openly published findings.",
+  "rankings": [
+    {
+      "rank": 1,
+      "year": 2020,
+      "make": "Ford",
+      "model": "F-150",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": "Full-size truck segment leader in multiple annual used-market roundups."
+    },
+    {
+      "rank": 2,
+      "year": 2019,
+      "make": "Chevrolet",
+      "model": "Silverado 1500",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 3,
+      "year": 2018,
+      "make": "Toyota",
+      "model": "Camry",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 4,
+      "year": 2017,
+      "make": "Honda",
+      "model": "Civic",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 5,
+      "year": 2019,
+      "make": "Toyota",
+      "model": "RAV4",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 6,
+      "year": 2018,
+      "make": "Honda",
+      "model": "CR-V",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 7,
+      "year": 2016,
+      "make": "Jeep",
+      "model": "Grand Cherokee",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 8,
+      "year": 2015,
+      "make": "BMW",
+      "model": "3 Series",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 9,
+      "year": 2017,
+      "make": "Nissan",
+      "model": "Rogue",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 10,
+      "year": 2016,
+      "make": "Toyota",
+      "model": "Tacoma",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": "Mid-size truck — high buyer interest segment."
+    },
+    {
+      "rank": 11,
+      "year": 2014,
+      "make": "Honda",
+      "model": "Accord",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    },
+    {
+      "rank": 12,
+      "year": 2018,
+      "make": "Subaru",
+      "model": "Outback",
+      "source_name": "iSeeCars Most Popular Used Cars (published analysis)",
+      "source_url": "https://www.iseecars.com/most-popular-used-cars-study",
+      "report_title": "Most Popular Used Cars",
+      "as_of": "2024-01-15",
+      "notes": null
+    }
+  ]
+}
