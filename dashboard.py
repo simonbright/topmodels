@@ -10,6 +10,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -19,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "out"
 CACHE = ROOT / "cache"
 CONFIG_PATH = ROOT / "config.yaml"
+EASTERN = ZoneInfo("America/New_York")
 
 SUMMARY_CSS = """
 <style>
@@ -278,11 +280,11 @@ generated = data.get("generated_at")
 if generated:
     try:
         run_dt = datetime.fromisoformat(generated.replace("Z", "+00:00"))
-        run_str = run_dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        run_str = run_dt.astimezone(EASTERN).strftime("%Y-%m-%d %I:%M %p %Z")
     except ValueError:
         run_str = generated
 else:
-    run_str = datetime.fromtimestamp(json_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    run_str = datetime.fromtimestamp(json_mtime, tz=EASTERN).strftime("%Y-%m-%d %I:%M %p %Z")
 
 cov = coverage_summary(df)
 cov_line = " · ".join(f"{r['signal']}: {r['models_with_data']}/{len(df)}" for _, r in cov.iterrows())
