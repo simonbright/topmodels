@@ -83,6 +83,17 @@ Demo/simulator runs are excluded by default (`firstparty.exclude_demo: true`).
 - LLM-generated copy is **not** auto-published — backlog items note `needs_review`
 - Paid connectors require explicit config + budget cap
 
+## Internal dashboard (localhost)
+
+Read-only Streamlit inspector over `out/` — ranked table, weight preview, drill-down, coverage gaps.
+
+```bash
+pip install -e ".[dashboard]"
+streamlit run dashboard.py
+```
+
+Open http://localhost:8501. Weight sliders re-rank live; **Save weights to config.yaml** only writes on explicit button click.
+
 ## Tests
 
 ```bash

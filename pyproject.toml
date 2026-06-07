@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-httpx>=0.30"]
+dashboard = ["streamlit>=1.32"]
 phase2 = ["praw>=7.7"]
 phase3 = []
 
