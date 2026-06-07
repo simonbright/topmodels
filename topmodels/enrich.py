@@ -2,38 +2,44 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from datetime import datetime, timezone
 
 from topmodels.config import PipelineConfig
 from topmodels.connectors.nhtsa import NhtsaConnector
 from topmodels.http_client import CachedHttpClient
-from topmodels.models import EnrichmentField, ModelEnrichment, RankedModel, VehicleKey
+from topmodels.models import EnrichmentField, ModelEnrichment, RankedModel
+from topmodels.taxonomy import Taxonomy
 
 
 def enrich_top_models(
     ranked: list[RankedModel],
     config: PipelineConfig,
+    taxonomy: Taxonomy,
     *,
     refresh: bool = False,
 ) -> list[RankedModel]:
     if not config.sources.nhtsa:
         return ranked
 
-    nhtsa = NhtsaConnector(config, CachedHttpClient(config.cache_path / "nhtsa"), refresh=refresh)
+    nhtsa = NhtsaConnector(
+        config,
+        CachedHttpClient(config.cache_path / "nhtsa"),
+        taxonomy,
+        refresh=refresh,
+    )
     now = datetime.now(timezone.utc)
 
     for item in ranked:
         vehicle = item.vehicle
-        recall_count, recalls = nhtsa._safe_fetch(
-            nhtsa.fetch_recalls, vehicle, lambda _e: (0, [])
-        )
-        complaint_count, components = nhtsa._safe_fetch(
-            nhtsa.fetch_complaints, vehicle, lambda _e: (0, Counter())
-        )
-        investigation_count = nhtsa._safe_fetch(
-            nhtsa.fetch_investigations, vehicle, lambda _e: 0
-        )
+        data = nhtsa.fetch_enrichment_data(vehicle)
+        if not data:
+            item.enrichment = ModelEnrichment(
+                notes=[
+                    "NHTSA enrichment missing — model token did not resolve or API query failed. "
+                    "Do not treat as zero complaints."
+                ]
+            )
+            continue
 
         enrichment = ModelEnrichment(
             recalls=[
@@ -46,10 +52,10 @@ def enrich_top_models(
                     "report_date": r.get("ReportReceivedDate"),
                     "source": "NHTSA Recalls API",
                 }
-                for r in recalls[:10]
+                for r in data["recalls"][:10]
             ],
             recall_count=EnrichmentField(
-                value=recall_count,
+                value=data["recall_count"],
                 source="NHTSA Recalls API",
                 as_of=now,
             ),
@@ -59,10 +65,10 @@ def enrich_top_models(
                     source="NHTSA Complaints API",
                     as_of=now,
                 )
-                for name, count in components.most_common(5)
+                for name, count in data["components"].most_common(5)
             ],
             investigation_count=EnrichmentField(
-                value=investigation_count,
+                value=data["investigation_count"],
                 source="NHTSA Investigations API",
                 as_of=now,
             ),

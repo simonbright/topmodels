@@ -47,7 +47,15 @@ def run_cmd(
     else:
         typer.echo(f"Wrote {config.output_path / 'top_models.csv'}")
         typer.echo(f"Wrote {config.output_path / 'top_models.json'}")
+        typer.echo(f"Wrote {config.output_path / 'coverage_report.json'}")
         typer.echo(f"Wrote {config.output_path / 'backlog.md'}")
+        meta_path = config.output_path / "run_meta.json"
+        if meta_path.exists():
+            import json
+
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if meta.get("coverage_summary"):
+                typer.echo(meta["coverage_summary"])
 
 
 app = cli  # entry point alias

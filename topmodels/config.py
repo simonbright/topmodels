@@ -15,11 +15,22 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class WeightsConfig(BaseModel):
-    search: float = 0.30
-    listings: float = 0.15
-    community: float = 0.10
-    first_party: float = 0.25
-    problems: float = 0.20
+    search: float = 0.55
+    problems: float = 0.40
+    first_party: float = 0.05
+    listings: float = 0.0
+    community: float = 0.0
+
+
+class ActivationThresholdConfig(BaseModel):
+    first_party_total_scans: int = 50
+
+
+class CalibrationConfig(BaseModel):
+    min_first_party_scans: int = 5
+    min_sample_by_signal: dict[str, int] = Field(default_factory=lambda: {"first_party": 5})
+    activation_threshold: ActivationThresholdConfig = Field(default_factory=ActivationThresholdConfig)
+    shrinkage_prior: float = 1.0
 
 
 class SourcesConfig(BaseModel):
@@ -62,8 +73,9 @@ class ReportsConfig(BaseModel):
 
 
 class PipelineConfig(BaseModel):
-    top_n: int = 25
+    top_n: int = 10
     weights: WeightsConfig = Field(default_factory=WeightsConfig)
+    calibration: CalibrationConfig = Field(default_factory=CalibrationConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     model_year_window: ModelYearWindow = Field(default_factory=ModelYearWindow)

@@ -16,7 +16,8 @@ from topmodels.connectors.trends import TrendsConnector
 from topmodels.enrich import enrich_top_models
 from topmodels.http_client import CachedHttpClient
 from topmodels.models import RankedModel, VehicleKey
-from topmodels.normalize import aggregate_by_model, normalize_records
+from topmodels.calibration import SIGNAL_BUCKETS
+from topmodels.normalize import aggregate_signals, normalize_records
 from topmodels.score import score_models
 from topmodels.taxonomy import Taxonomy
 
@@ -34,12 +35,14 @@ def _fetch_signals(
     config: PipelineConfig,
     sources,
     models: list[VehicleKey],
+    taxonomy: Taxonomy,
     *,
     refresh: bool,
-) -> list:
+) -> tuple[list, list[dict]]:
     from topmodels.models import SignalRecord
 
     records: list[SignalRecord] = []
+    nhtsa_misses: list[dict] = []
     http = CachedHttpClient(config.cache_path)
 
     if sources.reports:
@@ -47,11 +50,13 @@ def _fetch_signals(
     if sources.firstparty:
         records.extend(FirstPartyConnector(config, refresh=refresh).fetch(models))
     if sources.nhtsa:
-        records.extend(NhtsaConnector(config, http, refresh=refresh).fetch(models))
+        nhtsa = NhtsaConnector(config, http, taxonomy, refresh=refresh)
+        records.extend(nhtsa.fetch(models))
+        nhtsa_misses = list(nhtsa.miss_log)
     if sources.trends:
         records.extend(TrendsConnector(config, refresh=refresh).fetch(models))
 
-    return records
+    return records, nhtsa_misses
 
 
 def _load_previous_ranks(output_dir: Path) -> dict[str, int]:
@@ -89,6 +94,102 @@ def _trends_health(cache_root: Path) -> dict:
     return {"cached_keywords": with_data + failed, "with_data": with_data, "failed": failed}
 
 
+def _signal_coverage_counts(ranked: list, bucket: str) -> tuple[int, int, int]:
+    """Return (with_data, missing, gated) for a signal bucket across ranked models."""
+    with_data = missing = gated = 0
+    for item in ranked:
+        meta = item.signal_meta.get(bucket, {})
+        if meta.get("eligible") and meta.get("data_present") and meta.get("normalized", 0) > 0:
+            with_data += 1
+        elif not meta.get("data_present", True):
+            missing += 1
+        elif not meta.get("eligible", True):
+            gated += 1
+    return with_data, missing, gated
+
+
+def _build_coverage_report(
+    bundle,
+    ranked: list,
+    vehicles: dict,
+    gate_notes: dict,
+    effective_weights: dict,
+    nhtsa_misses: list,
+) -> dict:
+    per_signal = {}
+    for bucket in SIGNAL_BUCKETS:
+        with_data, missing, gated = _signal_coverage_counts(ranked, bucket)
+        per_signal[bucket] = {
+            "with_data": with_data,
+            "missing": missing,
+            "gated": gated,
+            "effective_weight": effective_weights.get(bucket, 0.0),
+            "gate_note": gate_notes.get(bucket, ""),
+        }
+
+    models_detail = []
+    for item in ranked:
+        v = item.vehicle
+        models_detail.append(
+            {
+                "canonical_id": v.canonical_id(),
+                "label": v.display_label(),
+                "model_confidence": item.model_confidence,
+                "signals": item.signal_meta,
+            }
+        )
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "per_signal": per_signal,
+        "nhtsa_unmatched_or_empty": nhtsa_misses,
+        "gate_notes": gate_notes,
+        "effective_weights": effective_weights,
+        "total_first_party_scans": bundle.total_first_party_scans,
+        "models": models_detail,
+        "seed_count": len(vehicles),
+    }
+
+
+def _coverage_summary_line(coverage_report: dict, ranked_count: int) -> str:
+    parts = []
+    for bucket in SIGNAL_BUCKETS:
+        ps = coverage_report["per_signal"][bucket]
+        note = ps.get("gate_note") or ""
+        if note and "gated" in note:
+            parts.append(f"{bucket} gated")
+        elif ps["effective_weight"] <= 0:
+            parts.append(f"{bucket} off")
+        elif ps["missing"]:
+            parts.append(f"{bucket} {ps['with_data']}/{ranked_count} ({ps['missing']} missing)")
+        else:
+            parts.append(f"{bucket} {ps['with_data']}/{ranked_count}")
+    return "Coverage: " + " · ".join(parts)
+
+
+def _write_coverage_report(out: Path, report: dict) -> None:
+    (out / "coverage_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    lines = [
+        "# Coverage Report",
+        "",
+        f"_Generated {report['generated_at']}_",
+        "",
+        "## Per signal",
+        "",
+    ]
+    for bucket, ps in report["per_signal"].items():
+        gate = f" — {ps['gate_note']}" if ps.get("gate_note") else ""
+        lines.append(
+            f"- **{bucket}**: {ps['with_data']} with data, {ps['missing']} missing, "
+            f"{ps['gated']} gated · effective weight {ps['effective_weight']:.2f}{gate}"
+        )
+    if report.get("nhtsa_unmatched_or_empty"):
+        lines.extend(["", "## NHTSA unmatched / empty queries", ""])
+        for miss in report["nhtsa_unmatched_or_empty"]:
+            lines.append(f"- {miss.get('vehicle', '?')}: {miss.get('reason', miss.get('error', 'unknown'))}")
+    (out / "coverage_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _build_run_meta(
     config: PipelineConfig,
     *,
@@ -99,6 +200,9 @@ def _build_run_meta(
     raw_records: list,
     ranked: list,
     top_n: int,
+    gate_notes: dict | None = None,
+    effective_weights: dict | None = None,
+    coverage_summary: str = "",
 ) -> dict:
     from collections import Counter
 
@@ -201,6 +305,9 @@ def _build_run_meta(
         "sources": source_rows,
         "warnings": warnings,
         "disabled_by_phase": disabled_paid,
+        "gate_notes": gate_notes or {},
+        "effective_weights": effective_weights or {},
+        "coverage_summary": coverage_summary,
         "inputs": {
             "curated_reports": str(reports_path),
             "curated_reports_exists": reports_path.exists(),
@@ -281,39 +388,46 @@ def run_pipeline(
         )
 
     models = taxonomy.resolve_many(seeds)
-    raw_records = _fetch_signals(config, sources, models, refresh=refresh)
+    raw_records, nhtsa_misses = _fetch_signals(
+        config, sources, models, taxonomy, refresh=refresh
+    )
     normalized = normalize_records(raw_records, taxonomy)
-    aggregated = aggregate_by_model(normalized)
+    bundle = aggregate_signals(normalized, config, nhtsa_misses=nhtsa_misses)
 
     vehicles = {m.canonical_id(): m for m in models}
-    # Include any keys seen in signals but not in seed list
-    for key in aggregated:
+    for key in bundle.raw_by_key:
         if key not in vehicles:
             parts = key.split("|")
             if len(parts) >= 3:
-                v = VehicleKey(year=int(parts[0]), make=parts[1], model=parts[2])
-                vehicles[key] = v
+                vehicles[key] = VehicleKey(year=int(parts[0]), make=parts[1], model=parts[2])
 
-    scored = score_models(vehicles, aggregated, config)
+    scored, gate_notes, effective_weights = score_models(vehicles, bundle, config)
     previous = _load_previous_ranks(config.output_path)
 
     ranked: list[RankedModel] = []
-    for idx, (key, breakdown, signals) in enumerate(scored[:n], start=1):
+    for idx, (key, result) in enumerate(scored[:n], start=1):
         prev_rank = previous.get(key)
         riser = prev_rank is not None and idx < prev_rank
         ranked.append(
             RankedModel(
                 rank=idx,
                 vehicle=vehicles[key],
-                score=breakdown,
-                signals=signals,
+                score=result.breakdown,
+                signals=result.signals,
+                signal_meta=result.signal_meta,
+                model_confidence=result.model_confidence,
                 riser=riser,
                 previous_rank=prev_rank,
             )
         )
 
     if not dry_run and sources.nhtsa:
-        ranked = enrich_top_models(ranked, config, refresh=refresh)
+        ranked = enrich_top_models(ranked, config, taxonomy, refresh=refresh)
+
+    coverage_report = _build_coverage_report(
+        bundle, ranked, vehicles, gate_notes, effective_weights, nhtsa_misses
+    )
+    coverage_summary = _coverage_summary_line(coverage_report, len(ranked))
 
     if dry_run:
         return ranked
@@ -328,35 +442,49 @@ def run_pipeline(
         raw_records=raw_records,
         ranked=ranked,
         top_n=n,
+        gate_notes=gate_notes,
+        effective_weights=effective_weights,
+        coverage_summary=coverage_summary,
     )
-    _write_outputs(config, ranked, run_meta=run_meta)
+    _write_outputs(config, ranked, run_meta=run_meta, coverage_report=coverage_report)
     return ranked
 
 
-def _write_outputs(config: PipelineConfig, ranked: list[RankedModel], *, run_meta: dict | None = None) -> None:
+def _write_outputs(
+    config: PipelineConfig,
+    ranked: list[RankedModel],
+    *,
+    run_meta: dict | None = None,
+    coverage_report: dict | None = None,
+) -> None:
     out = config.output_path
     rows = []
     for item in ranked:
         v = item.vehicle
-        rows.append(
-            {
-                "rank": item.rank,
-                "canonical_id": v.canonical_id(),
-                "year": v.year,
-                "make": v.make,
-                "model": v.model,
-                "priority_score": round(item.score.total, 4),
-                "score_search": round(item.score.search, 4),
-                "score_listings": round(item.score.listings, 4),
-                "score_community": round(item.score.community, 4),
-                "score_first_party": round(item.score.first_party, 4),
-                "score_problems": round(item.score.problems, 4),
-                "explanation": item.score.explanation,
-                "riser": item.riser,
-                "previous_rank": item.previous_rank,
-                **{f"signal_{k}": v for k, v in item.signals.items()},
-            }
-        )
+        row = {
+            "rank": item.rank,
+            "canonical_id": v.canonical_id(),
+            "year": v.year,
+            "make": v.make,
+            "model": v.model,
+            "priority_score": round(item.score.total, 4),
+            "score_search": round(item.score.search, 4),
+            "score_listings": round(item.score.listings, 4),
+            "score_community": round(item.score.community, 4),
+            "score_first_party": round(item.score.first_party, 4),
+            "score_problems": round(item.score.problems, 4),
+            "model_confidence": item.model_confidence,
+            "explanation": item.score.explanation,
+            "riser": item.riser,
+            "previous_rank": item.previous_rank,
+            **{f"signal_{k}": val for k, val in item.signals.items()},
+        }
+        for bucket, meta in item.signal_meta.items():
+            row[f"matched_{bucket}"] = meta.get("matched")
+            row[f"data_present_{bucket}"] = meta.get("data_present")
+            row[f"confidence_{bucket}"] = meta.get("confidence")
+            row[f"sample_size_{bucket}"] = meta.get("sample_size")
+        rows.append(row)
 
     df = pd.DataFrame(rows)
     df.to_csv(out / "top_models.csv", index=False)
@@ -376,4 +504,6 @@ def _write_outputs(config: PipelineConfig, ranked: list[RankedModel], *, run_met
     (out / "top_models.json").write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
     if run_meta:
         (out / "run_meta.json").write_text(json.dumps(run_meta, indent=2), encoding="utf-8")
+    if coverage_report:
+        _write_coverage_report(out, coverage_report)
     _write_backlog(out / "backlog.md", ranked)

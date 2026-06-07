@@ -12,6 +12,7 @@ def test_aggregate_problems_sums():
     records = [
         SignalRecord.from_vehicle(vehicle, signal="recall_count", value=2, source="NHTSA"),
         SignalRecord.from_vehicle(vehicle, signal="complaint_count", value=10, source="NHTSA"),
+        SignalRecord.from_vehicle(vehicle, signal="investigation_count", value=0, source="NHTSA"),
         SignalRecord.from_vehicle(vehicle, signal="first_party_scans", value=3, source="telemetry"),
     ]
     agg = aggregate_by_model(records)

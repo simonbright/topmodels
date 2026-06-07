@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from topmodels.http_client import CachedHttpClient
@@ -41,6 +42,49 @@ MAKE_ALIASES: dict[str, str] = {
 }
 
 # Trim / body-style tokens stripped for model-level joins
+def nhtsa_api_model_candidates(model_name: str) -> list[str]:
+    """Generate NHTSA API model tokens to try (hyphen/spacing variants)."""
+    raw = str(model_name).strip()
+    if not raw:
+        return []
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        t = s.strip()
+        if not t:
+            return
+        for fmt in (t, t.title(), t.upper()):
+            key = fmt.lower()
+            if key not in seen:
+                seen.add(key)
+                variants.append(fmt)
+
+    add(raw)
+    add(raw.replace("-", ""))
+    add(raw.replace("-", " "))
+    add(raw.replace(" ", ""))
+    add(re.sub(r"\s+", " ", raw))
+    return variants
+
+
+@dataclass
+class NhtsaModelResolution:
+    api_make: str
+    api_model: str
+    vpic_matched: bool
+    vpic_model_name: str | None = None
+    candidates: list[str] = field(default_factory=list)
+
+
+# Editorial names that differ from vPIC but NHTSA API accepts
+NHTSA_EDITORIAL_ALIASES: dict[str, list[str]] = {
+    "SILVERADO 1500": ["Silverado 1500", "Silverado LD", "Silverado"],
+    "SILVERADO": ["Silverado", "Silverado LD"],
+    "F-150": ["F-150", "F150", "F 150"],
+    "F150": ["F-150", "F150", "F 150"],
+}
+
 MODEL_NOISE = re.compile(
     r"\b(sedan|coupe|hatchback|wagon|suv|awd|fwd|4wd|2wd|hybrid|plug-in|phev|ev|"
     r"limited|premium|sport|touring|lx|ex|se|le|xle|sr5|trd|crew cab|extended cab)\b",
@@ -87,6 +131,7 @@ class Taxonomy:
         self.http = http
         self.refresh = refresh
         self._make_model_cache: dict[tuple[str, int], set[str]] = {}
+        self._vpic_api_names: dict[tuple[str, int], dict[str, str]] = {}
 
     def all_makes(self) -> dict[str, str]:
         """Return upper make name → NHTSA Make_Name."""
@@ -108,30 +153,94 @@ class Taxonomy:
         self._all_makes_cache = results
         return results
 
-    def models_for_make_year(self, make: str, year: int) -> set[str]:
+    def _load_vpic_models(self, make: str, year: int) -> tuple[set[str], dict[str, str]]:
         cache_key = (make.upper(), year)
         if cache_key in self._make_model_cache:
-            return self._make_model_cache[cache_key]
+            return self._make_model_cache[cache_key], self._vpic_api_names[cache_key]
 
         makes = self.all_makes()
         canonical = normalize_make(make)
         if not canonical:
-            return set()
-        make_name = makes.get(canonical, canonical.title())
+            self._make_model_cache[cache_key] = set()
+            self._vpic_api_names[cache_key] = {}
+            return set(), {}
 
+        make_name = makes.get(canonical, canonical.title())
         data = self.http.get_json(
             "vpic",
             f"{VPIC_BASE}/GetModelsForMakeYear/make/{make_name}/modelyear/{year}?format=json",
             refresh=self.refresh,
         )
         models: set[str] = set()
+        api_names: dict[str, str] = {}
         for row in data.get("Results", []):
             model_name = str(row.get("Model_Name", "")).strip()
             norm = normalize_model(model_name)
             if norm:
                 models.add(norm)
+                api_names[norm] = model_name
         self._make_model_cache[cache_key] = models
+        self._vpic_api_names[cache_key] = api_names
+        return models, api_names
+
+    def models_for_make_year(self, make: str, year: int) -> set[str]:
+        models, _ = self._load_vpic_models(make, year)
         return models
+
+    def resolve_nhtsa_query(self, vehicle: VehicleKey) -> NhtsaModelResolution:
+        """Map canonical model to vPIC + NHTSA API model token."""
+        mk = normalize_make(vehicle.make)
+        md = normalize_model(vehicle.model)
+        makes = self.all_makes()
+        api_make = makes.get(mk or "", (mk or vehicle.make).title())
+
+        vpic_models, api_names = self._load_vpic_models(vehicle.make, vehicle.year)
+        vpic_matched = False
+        vpic_name: str | None = None
+        resolved_norm = md or vehicle.model.upper()
+
+        if vpic_models and md:
+            if md in vpic_models:
+                vpic_matched = True
+                vpic_name = api_names.get(md)
+                resolved_norm = md
+            else:
+                prefix_hits = [
+                    m
+                    for m in vpic_models
+                    if m.startswith(md) or md.startswith(m.split()[0])
+                ]
+                if len(prefix_hits) == 1:
+                    vpic_matched = True
+                    resolved_norm = prefix_hits[0]
+                    vpic_name = api_names.get(resolved_norm)
+                else:
+                    token_hits = [m for m in vpic_models if md.split()[0] in m.split()]
+                    if len(token_hits) == 1:
+                        vpic_matched = True
+                        resolved_norm = token_hits[0]
+                        vpic_name = api_names.get(resolved_norm)
+
+        seed = vpic_name or vehicle.model
+        candidates = nhtsa_api_model_candidates(seed)
+        if vpic_name and vpic_name not in candidates:
+            candidates.insert(0, vpic_name)
+
+        md_key = (md or vehicle.model.upper()).strip()
+        for alias_key, alias_tokens in NHTSA_EDITORIAL_ALIASES.items():
+            if alias_key in md_key or md_key.startswith(alias_key.split()[0]):
+                for token in reversed(alias_tokens):
+                    if token not in candidates:
+                        candidates.insert(0, token)
+
+        api_model = candidates[0] if candidates else vehicle.model.title()
+        return NhtsaModelResolution(
+            api_make=api_make,
+            api_model=api_model,
+            vpic_matched=vpic_matched,
+            vpic_model_name=vpic_name,
+            candidates=candidates,
+        )
 
     def resolve(self, vehicle: VehicleKey) -> VehicleKey:
         """Map editorial aliases onto canonical make/model; fuzzy-match model to vPIC when possible."""

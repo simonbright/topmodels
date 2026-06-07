@@ -124,6 +124,8 @@ class RankedModel(BaseModel):
     vehicle: VehicleKey
     score: ScoreBreakdown
     signals: dict[str, float] = Field(default_factory=dict)
+    signal_meta: dict[str, dict] = Field(default_factory=dict)
+    model_confidence: float = 0.0
     enrichment: ModelEnrichment | None = None
     riser: bool = False
     previous_rank: int | None = None
