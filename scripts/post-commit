@@ -1,0 +1,8 @@
+#!/bin/sh
+# Auto-push after every local commit (install via scripts/install-hooks.sh).
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+remote=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null | cut -d/ -f1)
+if [ -z "$remote" ]; then
+  remote=origin
+fi
+git push "$remote" "$branch"

@@ -273,6 +273,10 @@ run_meta: dict = data.get("run_meta") or {}
 st.title("Top Models — pipeline inspector")
 st.caption("Read-only viewer over `out/` — re-run `topmodels run --phase 1` to refresh data.")
 
+if st.sidebar.button("Reload outputs from disk"):
+    st.cache_data.clear()
+    st.rerun()
+
 if df.empty:
     st.error("No `out/top_models.json` found. Run the pipeline first: `topmodels run --phase 1`")
     st.stop()
