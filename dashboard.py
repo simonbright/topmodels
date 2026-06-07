@@ -113,6 +113,10 @@ def load_pipeline_output(json_mtime: float, backlog_mtime: float) -> dict:
     }
 
 
+def df_to_csv_bytes(frame: pd.DataFrame) -> bytes:
+    return frame.to_csv(index=False).encode("utf-8")
+
+
 def render_summary_cards(items: list[tuple[str, str]]) -> None:
     cards = "".join(
         f'<div class="run-summary-card"><div class="label">{label}</div><div class="value">{value}</div></div>'
@@ -351,18 +355,37 @@ with tab_ranked:
         "riser",
     ]
     display_cols = [c for c in display_cols if c in df.columns]
-    st.dataframe(
-        df[display_cols].rename(
-            columns={
-                "preview_rank": "rank (preview)",
-                "priority_preview": "score (preview)",
-                "priority_score": "score (pipeline)",
-                **{SCORE_COLS[s]: f"norm_{s}" for s in SIGNALS},
-            }
-        ),
-        width="stretch",
-        hide_index=True,
+    display_df = df[display_cols].rename(
+        columns={
+            "preview_rank": "rank (preview)",
+            "priority_preview": "score (preview)",
+            "priority_score": "score (pipeline)",
+            **{SCORE_COLS[s]: f"norm_{s}" for s in SIGNALS},
+        }
     )
+
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button(
+            label="Download ranked table (CSV)",
+            data=df_to_csv_bytes(display_df),
+            file_name="top_models_ranked_preview.csv",
+            mime="text/csv",
+            type="primary",
+        )
+    with dl2:
+        pipeline_csv = OUT / "top_models.csv"
+        if pipeline_csv.exists():
+            st.download_button(
+                label="Download pipeline CSV (last run)",
+                data=pipeline_csv.read_bytes(),
+                file_name="top_models.csv",
+                mime="text/csv",
+            )
+        else:
+            st.caption("_No out/top_models.csv on disk yet._")
+
+    st.dataframe(display_df, width="stretch", hide_index=True)
 
 with tab_drill:
     labels = df.apply(model_label, axis=1).tolist()
@@ -401,6 +424,13 @@ with tab_drill:
 
 with tab_coverage:
     st.subheader("Coverage by signal")
+    st.download_button(
+        label="Download coverage summary (CSV)",
+        data=df_to_csv_bytes(cov),
+        file_name="top_models_coverage.csv",
+        mime="text/csv",
+        key="download_coverage",
+    )
     st.dataframe(cov, width="stretch", hide_index=True)
 
     st.subheader("Per-model gaps")
