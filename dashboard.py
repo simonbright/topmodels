@@ -17,7 +17,39 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "out"
+CACHE = ROOT / "cache"
 CONFIG_PATH = ROOT / "config.yaml"
+
+SUMMARY_CSS = """
+<style>
+  .run-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin-bottom: 0.5rem; }
+  .run-summary-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    min-height: 4.5rem;
+  }
+  .run-summary-card .label {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-bottom: 0.35rem;
+    color: inherit;
+  }
+  .run-summary-card .value {
+    font-size: 1rem;
+    font-weight: 400;
+    line-height: 1.35;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  @media (max-width: 900px) {
+    .run-summary-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+"""
 
 SIGNALS = ["search", "listings", "community", "first_party", "problems"]
 SCORE_COLS = {s: f"score_{s}" for s in SIGNALS}
@@ -62,12 +94,41 @@ def load_pipeline_output(json_mtime: float, backlog_mtime: float) -> dict:
         if row.get("canonical_id")
     }
     backlog = parse_backlog((OUT / "backlog.md").read_text(encoding="utf-8")) if (OUT / "backlog.md").exists() else {}
+    meta_path = OUT / "run_meta.json"
+    run_meta = {}
+    if meta_path.exists():
+        try:
+            run_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            run_meta = {}
+
     return {
         "models": models,
         "enrichment": enrichment,
         "backlog": backlog,
         "generated_at": payload.get("generated_at"),
+        "run_meta": run_meta,
     }
+
+
+def render_summary_cards(items: list[tuple[str, str]]) -> None:
+    cards = "".join(
+        f'<div class="run-summary-card"><div class="label">{label}</div><div class="value">{value}</div></div>'
+        for label, value in items
+    )
+    st.markdown(f'<div class="run-summary-grid">{cards}</div>', unsafe_allow_html=True)
+
+
+def status_badge(status: str) -> str:
+    icons = {
+        "ok": "✅",
+        "partial": "⚠️",
+        "degraded": "⚠️",
+        "no_data": "⭕",
+        "missing_input": "❌",
+        "disabled": "⏸️",
+    }
+    return f"{icons.get(status, '❓')} {status}"
 
 
 def parse_backlog(text: str) -> dict[str, str]:
@@ -190,6 +251,7 @@ def coverage_matrix(df: pd.DataFrame) -> pd.DataFrame:
 # --- UI ---
 
 st.set_page_config(page_title="Top Models (internal)", layout="wide", page_icon="🚗")
+st.markdown(SUMMARY_CSS, unsafe_allow_html=True)
 
 json_mtime = _mtime(OUT / "top_models.json")
 backlog_mtime = _mtime(OUT / "backlog.md")
@@ -200,6 +262,7 @@ data = load_pipeline_output(json_mtime, backlog_mtime)
 df: pd.DataFrame = data["models"]
 enrichment_map: dict = data["enrichment"]
 backlog_map: dict = data["backlog"]
+run_meta: dict = data.get("run_meta") or {}
 
 st.title("Top Models — pipeline inspector")
 st.caption("Read-only viewer over `out/` — re-run `topmodels run --phase 1` to refresh data.")
@@ -224,14 +287,23 @@ else:
 cov = coverage_summary(df)
 cov_line = " · ".join(f"{r['signal']}: {r['models_with_data']}/{len(df)}" for _, r in cov.iterrows())
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Models ranked", len(df))
-col2.metric("Last run", run_str)
-col3.metric("Sources on", len(enabled_sources))
-col4.metric("Output file", "top_models.json")
+render_summary_cards(
+    [
+        ("Models ranked", str(len(df))),
+        ("Last run", run_str),
+        ("Sources on", str(len(enabled_sources))),
+        ("Output file", "out/top_models.json"),
+    ]
+)
 
 st.markdown(f"**Enabled sources:** {', '.join(enabled_sources) or '—'}")
 st.markdown(f"**Signal coverage:** {cov_line}")
+if run_meta.get("seed_count"):
+    st.caption(
+        f"Seeded {run_meta.get('seed_count')} models · "
+        f"resolved {run_meta.get('taxonomy_resolved_count', '—')} · "
+        f"{run_meta.get('raw_record_count', '—')} raw signals collected"
+    )
 
 # Sidebar — live weight preview
 st.sidebar.header("Weights (preview only)")
@@ -258,11 +330,12 @@ if st.sidebar.button("Save weights to config.yaml", type="primary"):
 
 st.sidebar.caption("Slider changes re-rank instantly. Saving updates config only on button click.")
 
-tab_ranked, tab_drill, tab_coverage, tab_risers, tab_backlog = st.tabs(
-    ["Ranked table", "Model drill-down", "Coverage & gaps", "Risers", "Backlog"]
+tab_ranked, tab_drill, tab_coverage, tab_ops, tab_risers, tab_backlog = st.tabs(
+    ["Ranked table", "Model drill-down", "Coverage & gaps", "Behind the scenes", "Risers", "Backlog"]
 )
 
 with tab_ranked:
+    raw_signal_cols = sorted(c for c in df.columns if c.startswith("signal_"))
     display_cols = [
         "preview_rank",
         "year",
@@ -272,6 +345,7 @@ with tab_ranked:
         "priority_score",
         "explanation",
         *[SCORE_COLS[s] for s in SIGNALS if SCORE_COLS[s] in df.columns],
+        *raw_signal_cols,
         "riser",
     ]
     display_cols = [c for c in display_cols if c in df.columns]
@@ -351,6 +425,60 @@ with tab_coverage:
         "Freshness: enrichment `as_of` timestamps are stored in top_models.json enrichment blocks. "
         "Re-run pipeline to refresh NHTSA/Trends data."
     )
+
+with tab_ops:
+    st.subheader("Connector status")
+    if run_meta.get("sources"):
+        ops_df = pd.DataFrame(run_meta["sources"])
+        ops_df["status_display"] = ops_df["status"].apply(status_badge)
+        st.dataframe(
+            ops_df[
+                ["status_display", "connector", "enabled", "records", "cache_files", "notes"]
+            ].rename(columns={"status_display": "status"}),
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.info("No `out/run_meta.json` yet — re-run `topmodels run --phase 1` to generate ops metadata.")
+
+    if run_meta.get("warnings"):
+        st.warning(" · ".join(run_meta["warnings"]))
+
+    st.subheader("What's working vs not")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Inputs**")
+        inputs = run_meta.get("inputs") or {}
+        if inputs:
+            for key in ("curated_reports", "firstparty_export"):
+                val = inputs.get(key, "—")
+                flag = "✅" if inputs.get(f"{key}_exists") else "❌"
+                st.markdown(f"{flag} `{val}`")
+        else:
+            fp = cfg.get("firstparty", {}).get("export_path", "data/sample_telemetry_export.json")
+            rp = cfg.get("reports", {}).get("curated_path", "data/curated_reports.json")
+            st.markdown(f"{'✅' if (ROOT / fp).exists() else '❌'} first-party: `{fp}`")
+            st.markdown(f"{'✅' if (ROOT / rp).exists() else '❌'} reports: `{rp}`")
+
+    with c2:
+        st.markdown("**Cache on disk**")
+        if CACHE.exists():
+            for sub in sorted(p for p in CACHE.iterdir() if p.is_dir()):
+                n = sum(1 for f in sub.rglob("*") if f.is_file())
+                st.markdown(f"- `{sub.name}/` — {n} files")
+        else:
+            st.markdown("_No cache/ directory yet_")
+
+    if run_meta.get("signals_emitted"):
+        st.subheader("Signals emitted (this run)")
+        st.json(run_meta["signals_emitted"])
+
+    if run_meta.get("disabled_by_phase"):
+        st.caption(
+            "Disabled by phase: " + ", ".join(run_meta["disabled_by_phase"]) + " — enable in config when ready."
+        )
+
+    st.markdown("**Refresh data:** `topmodels run --phase 1 --top-n 10` from repo root.")
 
 with tab_risers:
     if "riser" in df.columns and "previous_rank" in df.columns:

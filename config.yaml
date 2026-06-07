@@ -1,5 +1,5 @@
 # Top Models pipeline — weights and source toggles (committed; no secrets here)
-top_n: 25
+top_n: 10
 
 weights:
   search: 0.30

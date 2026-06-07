@@ -65,6 +65,151 @@ def _load_previous_ranks(output_dir: Path) -> dict[str, int]:
         return {}
 
 
+def _count_cache_files(cache_root: Path, namespace: str) -> int:
+    d = cache_root / namespace
+    if not d.exists():
+        return 0
+    return sum(1 for p in d.rglob("*") if p.is_file())
+
+
+def _trends_health(cache_root: Path) -> dict:
+    d = cache_root / "trends"
+    if not d.exists():
+        return {"cached_keywords": 0, "with_data": 0, "failed": 0}
+    with_data = failed = 0
+    for f in d.glob("*.json"):
+        try:
+            payload = json.loads(f.read_text(encoding="utf-8"))
+            if payload.get("mean_interest") is None or payload.get("error"):
+                failed += 1
+            else:
+                with_data += 1
+        except json.JSONDecodeError:
+            failed += 1
+    return {"cached_keywords": with_data + failed, "with_data": with_data, "failed": failed}
+
+
+def _build_run_meta(
+    config: PipelineConfig,
+    *,
+    phase: int,
+    sources,
+    seeds: list,
+    models: list,
+    raw_records: list,
+    ranked: list,
+    top_n: int,
+) -> dict:
+    from collections import Counter
+
+    from topmodels.models import SignalRecord
+
+    by_source = Counter()
+    by_signal = Counter()
+    for rec in raw_records:
+        if isinstance(rec, SignalRecord):
+            by_source[rec.source.split("(")[0].strip()] += 1
+            by_signal[rec.signal] += 1
+
+    cache_root = config.cache_path
+    fp_path = config.firstparty_export_path()
+    reports_path = config.reports_path()
+
+    source_rows = []
+    connector_specs = [
+        ("reports", sources.reports, "data/curated_reports.json", None),
+        ("firstparty", sources.firstparty, str(fp_path), None),
+        ("nhtsa", sources.nhtsa, "cache/nhtsa", ["recalls", "complaints", "investigations"]),
+        ("trends", sources.trends, "cache/trends", None),
+        ("reddit", sources.reddit, None, None),
+        ("keywordplanner", sources.keywordplanner, None, None),
+        ("marketcheck", sources.marketcheck, None, None),
+    ]
+
+    for name, enabled, path_hint, cache_ns_list in connector_specs:
+        row = {
+            "connector": name,
+            "enabled": bool(enabled),
+            "status": "disabled",
+            "records": 0,
+            "cache_files": 0,
+            "notes": "",
+        }
+        if not enabled:
+            row["notes"] = "Off in config.yaml (Phase 2/3 or manual toggle)."
+            source_rows.append(row)
+            continue
+
+        if name == "reports":
+            row["records"] = sum(1 for r in raw_records if getattr(r, "signal", "") == "report_rank_score")
+            row["cache_files"] = 0
+            row["status"] = "ok" if reports_path.exists() else "missing_input"
+            if not reports_path.exists():
+                row["notes"] = f"Missing {reports_path}"
+        elif name == "firstparty":
+            row["records"] = sum(
+                1 for r in raw_records if getattr(r, "signal", "").startswith("first_party")
+            )
+            row["status"] = "ok" if fp_path.exists() else "missing_input"
+            if not fp_path.exists():
+                row["notes"] = f"No telemetry export at {fp_path}"
+            else:
+                row["notes"] = f"Reading {fp_path.name}"
+        elif name == "nhtsa":
+            row["records"] = sum(
+                1
+                for r in raw_records
+                if "NHTSA" in getattr(r, "source", "")
+            )
+            row["cache_files"] = sum(_count_cache_files(cache_root, ns) for ns in (cache_ns_list or []))
+            row["cache_files"] += _count_cache_files(cache_root, "vpic")
+            row["status"] = "ok" if row["records"] else "no_data"
+        elif name == "trends":
+            row["records"] = sum(1 for r in raw_records if getattr(r, "signal", "") == "search_interest")
+            th = _trends_health(cache_root)
+            row["cache_files"] = th["cached_keywords"]
+            if th["failed"] and th["with_data"]:
+                row["status"] = "partial"
+                row["notes"] = f"pytrends: {th['with_data']} ok, {th['failed']} failed (rate limit/brittle)"
+            elif th["failed"]:
+                row["status"] = "degraded"
+                row["notes"] = "pytrends requests failed — search scores may be empty"
+            elif row["records"]:
+                row["status"] = "ok"
+            else:
+                row["status"] = "no_data"
+                row["notes"] = "No search_interest records emitted"
+
+        source_rows.append(row)
+
+    warnings = []
+    if not any(r["status"] == "ok" for r in source_rows if r["enabled"]):
+        warnings.append("No connector reported ok status.")
+    if sum(1 for r in source_rows if r.get("status") == "partial") > 0:
+        warnings.append("Some connectors returned partial data — see notes.")
+    disabled_paid = [n for n, e in sources.model_dump().items() if not e and n in ("reddit", "keywordplanner", "marketcheck")]
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "phase": phase,
+        "top_n": top_n,
+        "seed_count": len(seeds),
+        "taxonomy_resolved_count": len(models),
+        "ranked_count": len(ranked),
+        "raw_record_count": len(raw_records),
+        "signals_emitted": dict(by_signal),
+        "sources": source_rows,
+        "warnings": warnings,
+        "disabled_by_phase": disabled_paid,
+        "inputs": {
+            "curated_reports": str(reports_path),
+            "curated_reports_exists": reports_path.exists(),
+            "firstparty_export": str(fp_path),
+            "firstparty_export_exists": fp_path.exists(),
+        },
+    }
+
+
 def _write_backlog(path: Path, ranked: list[RankedModel]) -> None:
     lines = [
         "# Top Models Content Backlog",
@@ -174,11 +319,21 @@ def run_pipeline(
         return ranked
 
     config.output_path.mkdir(parents=True, exist_ok=True)
-    _write_outputs(config, ranked)
+    run_meta = _build_run_meta(
+        config,
+        phase=phase,
+        sources=sources,
+        seeds=seeds,
+        models=models,
+        raw_records=raw_records,
+        ranked=ranked,
+        top_n=n,
+    )
+    _write_outputs(config, ranked, run_meta=run_meta)
     return ranked
 
 
-def _write_outputs(config: PipelineConfig, ranked: list[RankedModel]) -> None:
+def _write_outputs(config: PipelineConfig, ranked: list[RankedModel], *, run_meta: dict | None = None) -> None:
     out = config.output_path
     rows = []
     for item in ranked:
@@ -219,4 +374,6 @@ def _write_outputs(config: PipelineConfig, ranked: list[RankedModel]) -> None:
         ],
     }
     (out / "top_models.json").write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
+    if run_meta:
+        (out / "run_meta.json").write_text(json.dumps(run_meta, indent=2), encoding="utf-8")
     _write_backlog(out / "backlog.md", ranked)
